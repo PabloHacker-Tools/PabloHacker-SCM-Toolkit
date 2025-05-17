@@ -1,0 +1,1653 @@
+#notebook 001
+# Notebook Cell 1: Set Up Item Code Configuration
+
+# Prompt the user to enter an item code
+item_code = input("Enter the item code: ").strip()
+
+# Optionally, save the item code to a configuration file for persistence
+with open("config.txt", "w") as config_file:
+    config_file.write(item_code)
+
+# Set a global variable for use in later analyses
+ITEM_CODE = item_code
+
+print(f"Item code '{ITEM_CODE}' has been saved and will be used for all future analyses.")
+
+import os
+print("Configuration file 'config.txt' is saved in:", os.getcwd())
+
+----
+
+# notebook 002
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+from datetime import datetime
+from sklearn.linear_model import LinearRegression
+
+# ---------------------------
+# Step 1: Read configuration and set global variable
+# ---------------------------
+with open("config.txt", "r") as file:
+    item_code = file.read().strip()
+
+# Set a global variable for use in future analyses
+ITEM_CODE = item_code
+
+print(f"Using item code: {ITEM_CODE}")
+print("Global variable: ITEM_CODE")
+print("Configuration file 'config.txt' is located at:", os.getcwd())
+
+# ---------------------------
+# Step 2: Load and process the sales data file
+# ---------------------------
+def load_and_process_sales_data(file_path):
+    """
+    Loads the Excel sales file, verifies its structure, and processes the data:
+      - Ensures the 'Item_Code' column exists and is read as string.
+      - Fills missing values in sales columns with 0.
+      - Converts sales columns to integers.
+      - Formats sales column names to 'Mon-yy' (e.g., Jan-22).
+    """
+    # Load the Excel file, forcing 'Item_Code' to be string
+    df = pd.read_excel(file_path, dtype={'Item_Code': str})
+    print("Sales file loaded successfully.\n")
+
+    # Verify that 'Item_Code' column exists
+    if 'Item_Code' not in df.columns:
+        raise ValueError("Column 'Item_Code' not found in the sales file.")
+    print("Column 'Item_Code' is present.\n")
+
+    # Identify sales columns (all columns except 'Item_Code')
+    sales_columns = [col for col in df.columns if col != 'Item_Code']
+    df[sales_columns] = df[sales_columns].fillna(0)
+    for col in sales_columns:
+        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+
+    # Format sales column names to 'Mon-yy'
+    rename_dict = {}
+    for col in sales_columns:
+        try:
+            dt = pd.to_datetime(col)
+            rename_dict[col] = dt.strftime('%b-%y')
+        except Exception:
+            rename_dict[col] = col
+    df.rename(columns=rename_dict, inplace=True)
+
+    print("Renamed sales columns:")
+    print(df.columns.tolist(), "\n")
+    return df
+
+# Update this path with the actual location of your Sales data Excel file
+sales_file_path = r"C:\Users\PHacker\OneDrive - Verbatim GmbH\07 Purchasing\001 - Kategorien\350 3D\Sales_Stats_3D_2022_2025.xlsx"
+sales_df = load_and_process_sales_data(sales_file_path)
+
+# ---------------------------
+# Step 3: Filter the sales data for the selected item code
+# ---------------------------
+def extract_item_sales(sales_df, item_code):
+    """
+    Extracts historical sales for the specified item code and returns a time series with a datetime index (YYYY-MM)
+    and sales values as integers.
+    """
+    item_code = str(item_code)
+    if item_code not in sales_df['Item_Code'].unique():
+        raise ValueError("Item code not found. Available codes: " +
+                         ", ".join(sales_df['Item_Code'].unique()))
+
+    # Filter the row for the given item code
+    row = sales_df[sales_df['Item_Code'] == item_code].iloc[0]
+    sales_data = row.drop(labels='Item_Code')
+
+    # Convert column names (in 'Mon-yy' format) to datetime objects, then reformat to "YYYY-MM"
+    dates = pd.to_datetime(sales_data.index, format='%b-%y')
+    formatted_dates = dates.strftime('%Y-%m')
+
+    # Create the time series with the formatted dates
+    time_series = pd.Series(data=sales_data.values, index=pd.to_datetime(formatted_dates, format='%Y-%m'))
+    time_series = time_series.astype(int).sort_index()
+    return time_series
+
+historical_sales = extract_item_sales(sales_df, ITEM_CODE)
+# Save as global variables for future analyses
+HISTORICAL_SALES = historical_sales
+
+# ---------------------------
+# Step 4: Display a single table with complete historical sales data
+# ---------------------------
+historical_sales_table = pd.DataFrame({
+    "Date": HISTORICAL_SALES.index.strftime("%Y-%m"),
+    "Units Sold": HISTORICAL_SALES.values
+})
+print("Historical Sales Data:")
+print(historical_sales_table)
+
+# Save the table globally
+HISTORICAL_SALES_TABLE = historical_sales_table
+
+# ---------------------------
+# Step 5: Create a line chart with the historical sales, a trend line, and an average line
+# ---------------------------
+plt.figure(figsize=(12,6))
+plt.plot(HISTORICAL_SALES.index, HISTORICAL_SALES.values, marker='o', label="Historical Sales", color="blue")
+
+# Create trend line using linear regression
+X = np.array([d.toordinal() for d in HISTORICAL_SALES.index]).reshape(-1, 1)
+y = HISTORICAL_SALES.values
+reg_model = LinearRegression().fit(X, y)
+trend_line = reg_model.predict(X)
+plt.plot(HISTORICAL_SALES.index, trend_line, label="Trend Line", color="red", linestyle="--")
+
+# Plot average sales line
+avg_sales = np.mean(HISTORICAL_SALES)
+plt.axhline(avg_sales, color="green", linestyle=":", label=f"Average Sales ({avg_sales:.0f})")
+
+plt.xlabel("Date")
+plt.ylabel("Units Sold")
+plt.title(f"Historical Sales for Item Code {ITEM_CODE}")
+plt.legend()
+plt.grid(True)
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+---
+
+#notebook 003
+
+import pandas as pd
+
+def get_MOQ_for_item(item_code, file_path):
+    """
+    Loads the MOQ Excel file, searches for the item code in the first column,
+    and returns the MOQ (value in the second column) for that item.
+
+    Parameters:
+      - item_code: the item code to search for (as a string, e.g., "055026")
+      - file_path: full path to the MOQ Excel file.
+
+    Returns:
+      - The MOQ value if found; otherwise, None.
+    """
+    # Force reading the first column as string to preserve leading zeros
+    df = pd.read_excel(file_path, dtype={0: str})
+
+    # Search for the item code in the first column (column A)
+    matching_row = df[df.iloc[:, 0] == item_code]
+
+    if matching_row.empty:
+        print(f"Item code {item_code} not found in file {file_path}.")
+        return None
+    else:
+        # Get the MOQ value from the second column (column B)
+        moq = matching_row.iloc[0, 1]
+        print(f"MOQ for item code {item_code} is: {moq}")
+        return moq
+
+# Define the path to the MOQ Excel file
+file_path_moq = r"C:\Users\PHacker\OneDrive - Verbatim GmbH\07 Purchasing\001 - Kategorien\350 3D\3D_MOQ_2024_2025.xlsx"
+
+# Use the global ITEM_CODE from Notebook 1 (it should already be saved in config.txt)
+selected_item_code = ITEM_CODE  # For example, "055026"
+
+# Retrieve and store the MOQ for the selected item code
+MOQ = get_MOQ_for_item(selected_item_code, file_path_moq)
+
+# Save the MOQ globally for future analyses
+GLOBAL_MOQ = MOQ
+
+---
+
+# notebook 004
+
+import win32com.client as win32
+import time
+from datetime import datetime
+
+def refresh_excel_and_capture_data(file_path, sheet_name, item_code):
+    """
+    Opens the Excel file (without showing the update prompt), executes 'Refresh All',
+    searches in the specified sheet (column B) for the given item code, and captures values
+    from columns K, L, M, N, O, and P of the found row.
+
+    Parameters:
+      - file_path (str): Full path to the Excel file.
+      - sheet_name (str): Name of the sheet to search (e.g., "3D").
+      - item_code (str): Item code to search for (from global ITEM_CODE).
+
+    Returns:
+      - A dictionary with data from columns K, L, M, N, O, and P if the item code is found;
+        otherwise, None.
+    """
+    # Start Excel and set options
+    excel = win32.gencache.EnsureDispatch('Excel.Application')
+    excel.Visible = True
+    excel.AskToUpdateLinks = False
+    excel.DisplayAlerts = False
+
+    # Open the workbook with UpdateLinks=3 (update all links)
+    workbook = excel.Workbooks.Open(Filename=file_path, UpdateLinks=3)
+
+    print("Executing 'Refresh All' in the workbook...")
+    workbook.RefreshAll()
+    time.sleep(10)  # Wait for the refresh to complete
+    print("Refresh All completed. Searching for the item code in the sheet...")
+
+    sheet = workbook.Sheets(sheet_name)
+    sheet.Activate()
+
+    # Search for the item code in column B
+    found = sheet.Range("B:B").Find(What=item_code, LookIn=win32.constants.xlValues)
+
+    if found:
+        found_row = found.Row
+        current_stock = sheet.Cells(found_row, 11).Value   # Column K
+        sales_open_deliveries = sheet.Cells(found_row, 12).Value   # Column L
+        sales_current_month = sheet.Cells(found_row, 13).Value  # Column M
+        sales_open_order = sheet.Cells(found_row, 14).Value   # Column N
+        open_purchase_order = sheet.Cells(found_row, 15).Value  # Column O
+        goods_in_transit = sheet.Cells(found_row, 16).Value   # Column P
+
+        data_dict = {
+            'Current Stock': current_stock,
+            'Sales Open Deliveries': sales_open_deliveries,
+            'Sales Current Month': sales_current_month,
+            'Sales Open Order': sales_open_order,
+            'Open Purchase Order': open_purchase_order,
+            'Goods in Transit': goods_in_transit
+        }
+        print(f"\nData for item code '{item_code}':")
+        for key, value in data_dict.items():
+            print(f"  {key}: {value}")
+
+        # Determine current month and year automatically
+        now = datetime.now()
+        current_month_year = now.strftime("%Y-%m")
+        print(f"\nCurrent month and year: {current_month_year}")
+
+        # Calculate the initial stock for the current month: current stock + sales current month
+        try:
+            cs = float(current_stock) if current_stock is not None else 0
+            scm = float(sales_current_month) if sales_current_month is not None else 0
+        except Exception as e:
+            cs = 0
+            scm = 0
+
+        initial_stock = cs + scm
+        print(f"Calculated Initial Stock for {current_month_year}: {initial_stock}")
+
+        # Save the captured data and calculated initial stock in global variables
+        global CAPTURED_DATA, INITIAL_STOCK
+        CAPTURED_DATA = data_dict
+        INITIAL_STOCK = initial_stock
+
+        # Optionally close workbook and quit Excel:
+        # workbook.Close(SaveChanges=False)
+        # excel.Quit()
+
+        return data_dict
+    else:
+        print(f"Item code '{item_code}' was not found in sheet '{sheet_name}'.")
+        return None
+
+# Define the path to the Excel file (update the path as necessary)
+file_path = r"Z:\Purchasing\PU-REG.xlsx"
+sheet_name = "3D"
+
+# Use the global ITEM_CODE from Notebook 1
+# It should be automatically set by the code in Notebook 1.
+captured_data = refresh_excel_and_capture_data(file_path, sheet_name, ITEM_CODE)
+
+---
+
+# notebook 005
+# import pandas as pd
+
+# -------------------------------------------------------------------
+# Step: Compute Additional Metrics for the Selected ITEM_CODE
+# -------------------------------------------------------------------
+# Assumptions:
+# - The global variable ITEM_CODE is already defined (from config.txt).
+# - The historical sales time series is stored in the global variable HISTORICAL_SALES.
+# - The captured data from the Excel refresh is stored in the global dictionary CAPTURED_DATA,
+#   which contains the key 'Current Stock'.
+
+# Retrieve current stock from CAPTURED_DATA (if available); otherwise, default to 0.
+try:
+    current_stock_value = float(CAPTURED_DATA['Current Stock'])
+except Exception:
+    current_stock_value = 0
+
+# Compute the 6-month average sales from HISTORICAL_SALES.
+if len(HISTORICAL_SALES) >= 6:
+    avg_sales_6m = HISTORICAL_SALES.tail(6).mean()
+else:
+    avg_sales_6m = HISTORICAL_SALES.mean()
+
+# Compute the 3-month average sales from HISTORICAL_SALES.
+if len(HISTORICAL_SALES) >= 3:
+    avg_sales_3m = HISTORICAL_SALES.tail(3).mean()
+else:
+    avg_sales_3m = HISTORICAL_SALES.mean()
+
+# Calculate the "stock range" in months: how long the current stock will last.
+if avg_sales_6m > 0:
+    stock_range_6m = current_stock_value / avg_sales_6m
+else:
+    stock_range_6m = float('inf')
+
+if avg_sales_3m > 0:
+    stock_range_3m = current_stock_value / avg_sales_3m
+else:
+    stock_range_3m = float('inf')
+
+# Register these values as global variables for future analyses.
+GLOBAL_MOQ = GLOBAL_MOQ if 'GLOBAL_MOQ' in globals() else None  # MOQ already loaded from previous steps.
+AVERAGE_SALES_6M = avg_sales_6m
+STOCK_RANGE_6M = stock_range_6m
+AVERAGE_SALES_3M = avg_sales_3m
+STOCK_RANGE_3M = stock_range_3m
+
+# Create a DataFrame to summarize the metrics without the "Interpretation" column.
+metrics_df = pd.DataFrame({
+    "Metric": [
+        "MOQ",
+        "Current Stock",
+        "Average Sales (Last 6 Months)",
+        "Stock Range (6-Month Avg)",
+        "Average Sales (Last 3 Months)",
+        "Stock Range (3-Month Avg)"
+    ],
+    "Value": [
+        GLOBAL_MOQ,
+        current_stock_value,
+        f"{avg_sales_6m:.2f}",
+        f"{stock_range_6m:.2f} months",
+        f"{avg_sales_3m:.2f}",
+        f"{stock_range_3m:.2f} months"
+    ]
+})
+
+print("Summary Metrics for ITEM_CODE:", ITEM_CODE)
+print(metrics_df)
+
+# Save the metrics DataFrame globally for future analyses.
+GLOBAL_METRICS = metrics_df
+
+---
+
+# notebook 006
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import scipy.stats as stats
+from sklearn.linear_model import LinearRegression
+
+# -------------------------------------------------------------------
+# Function: Analyze Sales Time Series
+# -------------------------------------------------------------------
+def analyze_sales_series(time_series):
+    """
+    Performs a descriptive statistical analysis of the sales time series.
+    Calculates:
+      - Mean, Median, Standard Deviation
+      - Quartiles, IQR, 10th and 90th Percentiles
+      - Shapiro-Wilk test for normality
+    Generates three plots:
+      1. Histogram
+      2. Boxplot
+      3. QQ-plot
+    Provides a brief interpretation of the results.
+    """
+    data = time_series.values
+
+    # Compute key statistics
+    mean_val = np.mean(data)
+    median_val = np.median(data)
+    std_val = np.std(data, ddof=1)
+    q1 = np.percentile(data, 25)
+    q3 = np.percentile(data, 75)
+    iqr_val = q3 - q1
+    perc_10 = np.percentile(data, 10)
+    perc_90 = np.percentile(data, 90)
+
+    # Shapiro-Wilk test for normality
+    shapiro_stat, shapiro_p = stats.shapiro(data)
+
+    # Display numeric results
+    print("Descriptive Statistics:")
+    print(f"Mean: {mean_val:.2f}")
+    print(f"Median: {median_val:.2f}")
+    print(f"Standard Deviation: {std_val:.2f}")
+    print(f"Q1 (25th percentile): {q1:.2f}")
+    print(f"Q3 (75th percentile): {q3:.2f}")
+    print(f"IQR: {iqr_val:.2f}")
+    print(f"10th Percentile: {perc_10:.2f}")
+    print(f"90th Percentile: {perc_90:.2f}\n")
+
+    print("Shapiro-Wilk Test:")
+    print(f"Statistic: {shapiro_stat:.4f}")
+    print(f"p-value: {shapiro_p:.4f}\n")
+
+    print("Interpretation:")
+    print(" - The mean and median indicate the central tendency of the sales.")
+    print(" - The standard deviation and IQR reflect the variability in sales.")
+    if shapiro_p < 0.05:
+        print(" - The Shapiro-Wilk test suggests that the data does not follow a normal distribution.")
+    else:
+        print(" - The Shapiro-Wilk test indicates that the data may follow a normal distribution.")
+
+    # Plot 1: Histogram
+    plt.figure(figsize=(8, 5))
+    plt.hist(data, bins=10, edgecolor='black')
+    plt.title("Sales Histogram")
+    plt.xlabel("Sales Units")
+    plt.ylabel("Frequency")
+    plt.grid(True)
+    plt.show()
+
+    # Plot 2: Boxplot
+    plt.figure(figsize=(8, 3))
+    plt.boxplot(data, vert=False)
+    plt.title("Sales Boxplot")
+    plt.xlabel("Sales Units")
+    plt.show()
+
+    # Plot 3: QQ-plot
+    plt.figure(figsize=(8, 5))
+    stats.probplot(data, dist="norm", plot=plt)
+    plt.title("Sales QQ-Plot")
+    plt.show()
+
+# Run the analysis on the global historical sales time series
+# HISTORICAL_SALES is assumed to have been set earlier
+analyze_sales_series(HISTORICAL_SALES)
+
+# -------------------------------------------------------------------
+# Comparative Summary of Sales Averages and Stock Ranges
+# -------------------------------------------------------------------
+# Calculate the overall historical average (entire time series)
+overall_avg_sales = HISTORICAL_SALES.mean()
+
+# AVERAGE_SALES_6M, STOCK_RANGE_6M, AVERAGE_SALES_3M, and STOCK_RANGE_3M
+# are assumed to be set in previous calculations.
+# Create a DataFrame for comparison:
+comparative_df = pd.DataFrame({
+    "Metric": [
+        "Overall Average Sales",
+        "6-Month Average Sales",
+        "6-Month Stock Range",
+        "3-Month Average Sales",
+        "3-Month Stock Range"
+    ],
+    "Value": [
+        f"{overall_avg_sales:.2f} units",
+        f"{AVERAGE_SALES_6M:.2f} units",
+        f"{STOCK_RANGE_6M:.2f} months",
+        f"{AVERAGE_SALES_3M:.2f} units",
+        f"{STOCK_RANGE_3M:.2f} months"
+    ]
+})
+
+print("\nComparative Summary of Sales Averages and Stock Ranges:")
+print(comparative_df)
+
+# Interpretation of the comparative metrics
+print("\nInterpretation of Comparative Metrics:")
+print(f"- The overall historical average sales is {overall_avg_sales:.2f} units per month.")
+print(f"- The last 6 months average is {AVERAGE_SALES_6M:.2f} units, suggesting a stock range of about {STOCK_RANGE_6M:.2f} months at that rate.")
+print(f"- The last 3 months average is {AVERAGE_SALES_3M:.2f} units, yielding a stock range of approximately {STOCK_RANGE_3M:.2f} months.")
+print("These comparisons help evaluate whether recent sales trends differ from the long-term historical average and if the current inventory levels are sufficient to cover expected demand.")
+
+# Save the comparative DataFrame globally for future analyses.
+GLOBAL_COMPARATIVE_METRICS = comparative_df
+
+----
+
+#notebook 007
+import pandas as pd
+import matplotlib.pyplot as plt
+import statsmodels.api as sm
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from statsmodels.tsa.seasonal import STL
+
+def analyze_series_structure(time_series):
+    """
+    Analyzes the structure of the time series for the selected ITEM_CODE.
+
+    The analysis includes:
+      - Stationarity check using the ADF test.
+      - Temporal dependency via ACF and PACF tables.
+      - STL decomposition to separate trend, seasonality, and residuals.
+
+    It prints the results in tables and provides a brief interpretation.
+    Additionally, it generates three plots:
+      1. ACF plot.
+      2. PACF plot.
+      3. STL decomposition plot.
+    """
+    # 1. ADF Test for stationarity
+    adf_result = adfuller(time_series)
+    adf_dict = {
+        'Test Statistic': adf_result[0],
+        'p-value': adf_result[1],
+        'Lags Used': adf_result[2],
+        'Observations': adf_result[3]
+    }
+    for key, value in adf_result[4].items():
+        adf_dict[f'Critical Value ({key})'] = value
+    adf_df = pd.DataFrame([adf_dict])
+    print("ADF Test Results:")
+    print(adf_df, "\n")
+
+    # 2. ACF and PACF Calculation (first 10 lags)
+    lags = 10
+    acf_vals = sm.tsa.acf(time_series, nlags=lags)
+    pacf_vals = sm.tsa.pacf(time_series, nlags=lags)
+    lags_array = list(range(len(acf_vals)))
+    acf_pacf_df = pd.DataFrame({
+        'Lag': lags_array,
+        'ACF': acf_vals,
+        'PACF': pacf_vals
+    })
+    print("ACF and PACF Table (first 10 lags):")
+    print(acf_pacf_df, "\n")
+
+    # 3. STL Decomposition (using period=12 for monthly data)
+    stl = STL(time_series, period=12)
+    res = stl.fit()
+
+    decomposition_df = pd.DataFrame({
+        'Trend': res.trend,
+        'Seasonal': res.seasonal,
+        'Residual': res.resid
+    }, index=time_series.index)
+    print("STL Decomposition (first 10 rows):")
+    print(decomposition_df.head(10), "\n")
+
+    # Compute the strength metrics for trend and seasonality
+    var_resid = res.resid.var()
+    var_seasonal = (res.seasonal + res.resid).var()
+    var_trend = (res.trend + res.resid).var()
+    strength_seasonality = max(0, 1 - var_resid / var_seasonal)
+    strength_trend = max(0, 1 - var_resid / var_trend)
+
+    stl_metrics = pd.DataFrame({
+        'Component': ['Trend', 'Seasonality'],
+        'Strength': [strength_trend, strength_seasonality]
+    })
+    print("STL Decomposition Metrics:")
+    print(stl_metrics, "\n")
+
+    # Brief interpretation
+    print("Interpretation:")
+    if adf_result[1] < 0.05:
+        print("- ADF test indicates the series is stationary (p-value < 0.05).")
+    else:
+        print("- ADF test suggests the series may not be stationary (p-value >= 0.05) and might need differencing.")
+
+    print("- The ACF and PACF tables reveal temporal dependencies; high values at specific lags suggest significant correlations with past values.")
+    print("- STL decomposition separates the series into trend, seasonal, and residual components.")
+    print("- The computed strength metrics indicate the relative contribution of trend and seasonality.")
+
+    # Plot 1: ACF plot
+    plt.figure(figsize=(8, 4))
+    plot_acf(time_series, lags=lags)
+    plt.title("ACF")
+    plt.show()
+
+    # Plot 2: PACF plot
+    plt.figure(figsize=(8, 4))
+    plot_pacf(time_series, lags=lags, method='ywm')
+    plt.title("PACF")
+    plt.show()
+
+    # Plot 3: STL Decomposition plot
+    plt.figure(figsize=(10, 6))
+    res.plot()
+    plt.title("STL Decomposition")
+    plt.show()
+
+# Run the analysis using the global historical sales for the selected ITEM_CODE.
+# HISTORICAL_SALES should be already defined from earlier steps.
+analyze_series_structure(HISTORICAL_SALES)
+
+---
+
+# notebook 008
+import warnings
+warnings.filterwarnings("ignore")  # Suppress warnings
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import statsmodels.api as sm
+
+# Import Exponential Smoothing models
+from statsmodels.tsa.holtwinters import ExponentialSmoothing, Holt
+
+# Import metrics from scikit-learn
+from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_absolute_percentage_error
+
+# -------------------------------------------------------------------
+# Function: compute_metrics
+# -------------------------------------------------------------------
+def compute_metrics(true_values, forecast_values):
+    """
+    Computes MAE, MSE, RMSE, and MAPE.
+    """
+    mae = mean_absolute_error(true_values, forecast_values)
+    mse = mean_squared_error(true_values, forecast_values)
+    rmse = np.sqrt(mse)
+    mape = mean_absolute_percentage_error(true_values, forecast_values) * 100  # Percentage
+    return {'MAE': mae, 'MSE': mse, 'RMSE': rmse, 'MAPE': mape}
+
+# -------------------------------------------------------------------
+# Forecasting for Group 1: Exponential Smoothing Models
+# -------------------------------------------------------------------
+# Use the global historical sales time series for the selected ITEM_CODE.
+# HISTORICAL_SALES is assumed to be defined from previous steps.
+sales_series = HISTORICAL_SALES.asfreq('MS')
+
+# Forecast horizon: next 12 months
+forecast_horizon = 12
+
+# For evaluation, if the historical series is long enough, split the data:
+if len(sales_series) > forecast_horizon:
+    n = len(sales_series)
+    n_train = n - forecast_horizon
+    train_part = sales_series.iloc[:n_train]
+    test_part = sales_series.iloc[n_train:]
+
+    # Model 1: Holt-Winters (Triple Exponential Smoothing)
+    hw_model = ExponentialSmoothing(
+        train_part, trend='add', seasonal='add',
+        seasonal_periods=12, initialization_method='estimated'
+    ).fit()
+    hw_forecast_test = hw_model.forecast(steps=forecast_horizon)
+    hw_metrics = compute_metrics(test_part, hw_forecast_test)
+
+    # Model 2: Holt’s Linear Trend Model
+    holt_model = Holt(train_part, initialization_method='estimated').fit()
+    holt_forecast_test = holt_model.forecast(steps=forecast_horizon)
+    holt_metrics = compute_metrics(test_part, holt_forecast_test)
+else:
+    hw_metrics = {}
+    holt_metrics = {}
+
+# Fit models on the full historical series to forecast the next 12 months.
+# Model 1: Holt-Winters
+full_hw_model = ExponentialSmoothing(
+    sales_series, trend='add', seasonal='add',
+    seasonal_periods=12, initialization_method='estimated'
+).fit()
+full_hw_forecast = full_hw_model.forecast(steps=forecast_horizon)
+
+# Model 2: Holt’s Linear Trend
+full_holt_model = Holt(sales_series, initialization_method='estimated').fit()
+full_holt_forecast = full_holt_model.forecast(steps=forecast_horizon)
+
+# Create a results DataFrame for Group 1 evaluation (if hold-out metrics exist)
+results_group1 = pd.DataFrame([
+    {"Model": "Holt-Winters (Triple Exp Smoothing)", **hw_metrics},
+    {"Model": "Holt’s Linear Trend", **holt_metrics}
+])
+
+print("Forecasting Results for Group 1 (Exponential Smoothing):")
+print(results_group1, "\n")
+
+# Determine the best model based on RMSE (if metrics exist)
+if not results_group1.empty and 'RMSE' in results_group1.columns:
+    best_model_row = results_group1.loc[results_group1['RMSE'].idxmin()]
+    best_model_name = best_model_row['Model']
+    print("Best Model in Group 1 based on RMSE:")
+    print(best_model_row, "\n")
+
+    # Use the forecast from the best model
+    if best_model_name == "Holt-Winters (Triple Exp Smoothing)":
+        best_forecast = full_hw_forecast
+    else:
+        best_forecast = full_holt_forecast
+else:
+    best_model_name = None
+    best_forecast = None
+
+# Plot: Historical Sales + Forecast from the Best Model
+plt.figure(figsize=(12, 6))
+plt.plot(sales_series.index, sales_series.values, marker='o', label="Historical Sales", color="blue")
+if best_forecast is not None:
+    forecast_index = pd.date_range(
+        start=sales_series.index[-1] + pd.DateOffset(months=1),
+        periods=forecast_horizon, freq='MS'
+    )
+    plt.plot(forecast_index, best_forecast.values, marker='o', linestyle='--',
+             label=f"Forecast ({best_model_name})", color="red")
+plt.xlabel("Date")
+plt.ylabel("Units Sold")
+plt.title(f"Historical Sales and 12-Month Forecast for ITEM_CODE {ITEM_CODE}")
+plt.legend()
+plt.grid(True)
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+# -------------------------------------------------------------------
+# Create a Forecast Table for the Next 12 Months
+# -------------------------------------------------------------------
+if best_forecast is not None:
+    forecast_index = pd.date_range(
+        start=sales_series.index[-1] + pd.DateOffset(months=1),
+        periods=forecast_horizon, freq='MS'
+    )
+    forecast_df = pd.DataFrame({
+        "Date": forecast_index.strftime('%Y-%m'),
+        "Forecast": best_forecast.values
+    })
+    print("12-Month Forecast Table:")
+    print(forecast_df)
+
+    # Save the forecast table to CSV
+
+---
+
+# notebook 009
+import warnings
+warnings.filterwarnings("ignore")  # Suppress warnings
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import statsmodels.api as sm
+from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_absolute_percentage_error
+
+# -------------------------------------------------------------------
+# Function: compute_metrics
+# -------------------------------------------------------------------
+def compute_metrics(true_values, forecast_values):
+    """
+    Computes MAE, MSE, RMSE, and MAPE.
+    """
+    mae = mean_absolute_error(true_values, forecast_values)
+    mse = mean_squared_error(true_values, forecast_values)
+    rmse = np.sqrt(mse)
+    mape = mean_absolute_percentage_error(true_values, forecast_values) * 100  # in percentage
+    return {'MAE': mae, 'MSE': mse, 'RMSE': rmse, 'MAPE': mape}
+
+# -------------------------------------------------------------------
+# Forecasting for Group 2: ARIMA/SARIMA Models
+# Models:
+#   - ARIMA(1,1,1)
+#   - SARIMA(1,1,1)(1,1,1,12)
+# -------------------------------------------------------------------
+# Use the global historical sales time series for the selected ITEM_CODE.
+# HISTORICAL_SALES is assumed to be defined from previous notebooks.
+sales_series = HISTORICAL_SALES.asfreq('MS')
+
+# Define forecast horizon: next 12 months
+forecast_horizon = 12
+
+# If possible, split the series for evaluation: use last 12 months as test set.
+if len(sales_series) > forecast_horizon:
+    n = len(sales_series)
+    n_train = n - forecast_horizon
+    train_part = sales_series.iloc[:n_train]
+    test_part = sales_series.iloc[n_train:]
+
+    # Model 1: ARIMA(1,1,1)
+    try:
+        arima_model = ARIMA(train_part, order=(1,1,1)).fit()
+        arima_forecast_test = arima_model.forecast(steps=forecast_horizon)
+        arima_metrics = compute_metrics(test_part, arima_forecast_test)
+    except Exception as e:
+        arima_metrics = {}
+        print("ARIMA model error:", e)
+
+    # Model 2: SARIMA(1,1,1)(1,1,1,12)
+    try:
+        sarima_model = SARIMAX(train_part, order=(1,1,1), seasonal_order=(1,1,1,12),
+                                enforce_stationarity=False, enforce_invertibility=False).fit()
+        sarima_forecast_test = sarima_model.forecast(steps=forecast_horizon)
+        sarima_metrics = compute_metrics(test_part, sarima_forecast_test)
+    except Exception as e:
+        sarima_metrics = {}
+        print("SARIMA model error:", e)
+else:
+    arima_metrics = {}
+    sarima_metrics = {}
+
+# Fit models on the full historical series to forecast the next 12 months.
+# Model 1: ARIMA(1,1,1)
+full_arima_model = ARIMA(sales_series, order=(1,1,1)).fit()
+full_arima_forecast = full_arima_model.forecast(steps=forecast_horizon)
+
+# Model 2: SARIMA(1,1,1)(1,1,1,12)
+full_sarima_model = SARIMAX(sales_series, order=(1,1,1), seasonal_order=(1,1,1,12),
+                            enforce_stationarity=False, enforce_invertibility=False).fit()
+full_sarima_forecast = full_sarima_model.forecast(steps=forecast_horizon)
+
+# Compile evaluation results for Group 2
+results_group2 = pd.DataFrame([
+    {"Model": "ARIMA(1,1,1)", **arima_metrics},
+    {"Model": "SARIMA(1,1,1)(1,1,1,12)", **sarima_metrics}
+])
+
+print("Forecasting Results for Group 2 (ARIMA/SARIMA):")
+print(results_group2, "\n")
+
+# Determine best model based on RMSE (if metrics are available)
+if not results_group2.empty and 'RMSE' in results_group2.columns:
+    best_model_row = results_group2.loc[results_group2['RMSE'].idxmin()]
+    best_model_name = best_model_row['Model']
+    print("Best Model in Group 2 based on RMSE:")
+    print(best_model_row, "\n")
+
+    # Use the forecast from the best model on full series
+    if best_model_name == "ARIMA(1,1,1)":
+        best_forecast = full_arima_forecast
+    else:
+        best_forecast = full_sarima_forecast
+else:
+    best_model_name = None
+    best_forecast = None
+
+# Plot: Historical Sales + Forecast from the best model
+plt.figure(figsize=(12, 6))
+plt.plot(sales_series.index, sales_series.values, marker='o', label="Historical Sales", color="blue")
+if best_forecast is not None:
+    forecast_index = pd.date_range(start=sales_series.index[-1] + pd.DateOffset(months=1),
+                                   periods=forecast_horizon, freq='MS')
+    plt.plot(forecast_index, best_forecast.values, marker='o', linestyle='--',
+             label=f"Forecast ({best_model_name})", color="red")
+plt.xlabel("Date")
+plt.ylabel("Units Sold")
+plt.title(f"Historical Sales and 12-Month Forecast for ITEM_CODE {ITEM_CODE}")
+plt.legend()
+plt.grid(True)
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+# Create a Forecast Table for the Next 12 Months
+if best_forecast is not None:
+    forecast_index = pd.date_range(start=sales_series.index[-1] + pd.DateOffset(months=1),
+                                   periods=forecast_horizon, freq='MS')
+    forecast_df = pd.DataFrame({
+        "Date": forecast_index.strftime('%Y-%m'),
+        "Forecast": best_forecast.values
+    })
+    print("12-Month Forecast Table for Group 2:")
+    print(forecast_df)
+else:
+    forecast_df = None
+    print("No forecast available for Group 2.")
+
+# Save the forecast results globally for future analyses.
+GLOBAL_FORECAST_RESULTS_GROUP2 = {
+    "Evaluation": results_group2,
+    "BestModel": best_model_name,
+    "Forecast": best_forecast,
+    "ForecastTable": forecast_df
+}
+
+# Optionally, save the evaluation results to a CSV file.
+results_group2.to_csv("model_evaluation_results_group2.csv", index=False)
+
+
+----
+
+# notebook 010
+import warnings
+warnings.filterwarnings("ignore")  # Suppress warnings
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.pipeline import make_pipeline
+from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_absolute_percentage_error
+
+# -------------------------------------------------------------------
+# Function: compute_metrics
+# -------------------------------------------------------------------
+def compute_metrics(true_values, forecast_values):
+    """
+    Computes MAE, MSE, RMSE, and MAPE.
+    """
+    mae = mean_absolute_error(true_values, forecast_values)
+    mse = mean_squared_error(true_values, forecast_values)
+    rmse = np.sqrt(mse)
+    mape = mean_absolute_percentage_error(true_values, forecast_values) * 100  # Percentage
+    return {'MAE': mae, 'MSE': mse, 'RMSE': rmse, 'MAPE': mape}
+
+# -------------------------------------------------------------------
+# Forecasting for Group 3: Regression Models
+# Models:
+#   - Linear Regression
+#   - Polynomial Regression (Degree 2)
+# -------------------------------------------------------------------
+# Use the global historical sales time series for the selected ITEM_CODE.
+# HISTORICAL_SALES and ITEM_CODE are assumed to be defined from previous notebooks.
+sales_series = HISTORICAL_SALES.asfreq('MS')
+forecast_horizon = 12  # Forecast next 12 months
+
+# Create a numeric time index (month numbers) for regression.
+time_index = np.arange(len(sales_series)).reshape(-1, 1)
+y = sales_series.values
+
+# If the series is long enough, split the data for evaluation.
+if len(sales_series) > forecast_horizon:
+    n = len(sales_series)
+    n_train = n - forecast_horizon
+    X_train = time_index[:n_train]
+    y_train = y[:n_train]
+    X_test = time_index[n_train:]
+    y_test = y[n_train:]
+
+    # Model 1: Linear Regression
+    lin_model = LinearRegression().fit(X_train, y_train)
+    lin_forecast_test = lin_model.predict(X_test)
+    lin_metrics = compute_metrics(y_test, lin_forecast_test)
+
+    # Model 2: Polynomial Regression (Degree 2)
+    poly_model = make_pipeline(PolynomialFeatures(degree=2), LinearRegression())
+    poly_model.fit(X_train, y_train)
+    poly_forecast_test = poly_model.predict(X_test)
+    poly_metrics = compute_metrics(y_test, poly_forecast_test)
+else:
+    lin_metrics = {}
+    poly_metrics = {}
+
+# Fit models on the full historical series to forecast the next 12 months.
+X_full = np.arange(len(sales_series)).reshape(-1, 1)
+lin_model_full = LinearRegression().fit(X_full, y)
+# Forecast for time indexes from len(sales_series) to len(sales_series)+forecast_horizon-1.
+X_future = np.arange(len(sales_series), len(sales_series) + forecast_horizon).reshape(-1, 1)
+full_lin_forecast = lin_model_full.predict(X_future)
+
+poly_model_full = make_pipeline(PolynomialFeatures(degree=2), LinearRegression())
+poly_model_full.fit(X_full, y)
+full_poly_forecast = poly_model_full.predict(X_future)
+
+# Compile evaluation results for Group 3.
+results_group3 = pd.DataFrame([
+    {"Model": "Linear Regression", **lin_metrics},
+    {"Model": "Polynomial Regression (Degree 2)", **poly_metrics}
+])
+
+print("Forecasting Results for Group 3 (Regression):")
+print(results_group3, "\n")
+
+# Determine the best model based on RMSE.
+if not results_group3.empty and 'RMSE' in results_group3.columns:
+    best_model_row = results_group3.loc[results_group3['RMSE'].idxmin()]
+    best_model_name = best_model_row['Model']
+    print("Best Model in Group 3 based on RMSE:")
+    print(best_model_row, "\n")
+
+    # Use the forecast from the best model on the full series.
+    if best_model_name == "Linear Regression":
+        best_forecast = full_lin_forecast
+    else:
+        best_forecast = full_poly_forecast
+else:
+    best_model_name = None
+    best_forecast = None
+
+# Plot: Historical Sales and Forecast from the Best Regression Model.
+plt.figure(figsize=(12, 6))
+plt.plot(sales_series.index, sales_series.values, marker='o', label="Historical Sales", color="blue")
+if best_forecast is not None:
+    forecast_index = pd.date_range(start=sales_series.index[-1] + pd.DateOffset(months=1),
+                                   periods=forecast_horizon, freq='MS')
+    plt.plot(forecast_index, best_forecast, marker='o', linestyle='--',
+             label=f"Forecast ({best_model_name})", color="red")
+plt.xlabel("Date")
+plt.ylabel("Units Sold")
+plt.title(f"Historical Sales and 12-Month Forecast for ITEM_CODE {ITEM_CODE}")
+plt.legend()
+plt.grid(True)
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+# Create a Forecast Table for the Next 12 Months.
+if best_forecast is not None:
+    forecast_index = pd.date_range(start=sales_series.index[-1] + pd.DateOffset(months=1),
+                                   periods=forecast_horizon, freq='MS')
+    forecast_df = pd.DataFrame({
+        "Date": forecast_index.strftime("%Y-%m"),
+        "Forecast": best_forecast
+    })
+    print("12-Month Forecast Table for Group 3:")
+    print(forecast_df)
+else:
+    forecast_df = None
+    print("No forecast available for Group 3.")
+
+# Save the forecast results globally for future analyses.
+GLOBAL_FORECAST_RESULTS_GROUP3 = {
+    "Evaluation": results_group3,
+    "BestModel": best_model_name,
+    "Forecast": best_forecast,
+    "ForecastTable": forecast_df
+}
+
+# Optionally, save the evaluation results to a CSV file.
+results_group3.to_csv("model_evaluation_results_group3.csv", index=False)
+
+---
+
+# notebook 011
+import warnings
+warnings.filterwarnings("ignore")  # Suppress warnings
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Machine Learning libraries
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.svm import SVR
+import xgboost as xgb
+from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_absolute_percentage_error
+
+# For LSTM
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense
+from tensorflow.keras.callbacks import EarlyStopping
+
+# -------------------------------------------------------------------
+# Function: compute_metrics
+# -------------------------------------------------------------------
+def compute_metrics(true_values, forecast_values):
+    """
+    Computes MAE, MSE, RMSE, and MAPE.
+    """
+    mae = mean_absolute_error(true_values, forecast_values)
+    mse = mean_squared_error(true_values, forecast_values)
+    rmse = np.sqrt(mse)
+    mape = mean_absolute_percentage_error(true_values, forecast_values) * 100  # Percentage
+    return {'MAE': mae, 'MSE': mse, 'RMSE': rmse, 'MAPE': mape}
+
+# -------------------------------------------------------------------
+# Helper function to create sliding window dataset for LSTM
+# -------------------------------------------------------------------
+def create_sliding_window(data, window_size=3):
+    """
+    Transforms a 1D array into a supervised learning dataset with the specified window_size.
+    """
+    X, y = [], []
+    for i in range(len(data) - window_size):
+        X.append(data[i:i+window_size])
+        y.append(data[i+window_size])
+    return np.array(X), np.array(y)
+
+# -------------------------------------------------------------------
+# Forecasting for Group 4: Machine Learning Models
+# Models:
+#   - Random Forest Regressor
+#   - SVR
+#   - XGBoost Regressor
+#   - LSTM Neural Network
+# -------------------------------------------------------------------
+# Use the global historical sales time series for the selected ITEM_CODE.
+# HISTORICAL_SALES and ITEM_CODE are assumed to be defined from previous notebooks.
+sales_series = HISTORICAL_SALES.asfreq('MS')
+forecast_horizon = 12  # Forecast next 12 months
+
+# Create a simple numeric time index for the ML models (for RF, SVR, XGBoost)
+n = len(sales_series)
+X_full = np.arange(n).reshape(-1, 1)
+y_full = sales_series.values
+
+# Split data into training and test sets (if possible)
+if n > forecast_horizon:
+    n_train = n - forecast_horizon
+    X_train = X_full[:n_train]
+    y_train = y_full[:n_train]
+    X_test = X_full[n_train:]
+    y_test = y_full[n_train:]
+else:
+    X_train = X_full
+    y_train = y_full
+    X_test = None
+    y_test = None
+
+# --- Model 1: Random Forest Regressor ---
+rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
+rf_model.fit(X_train, y_train)
+if X_test is not None:
+    rf_forecast_test = rf_model.predict(X_test)
+    rf_metrics = compute_metrics(y_test, rf_forecast_test)
+else:
+    rf_metrics = {}
+
+# --- Model 2: SVR ---
+svr_model = SVR(kernel='rbf')
+svr_model.fit(X_train, y_train)
+if X_test is not None:
+    svr_forecast_test = svr_model.predict(X_test)
+    svr_metrics = compute_metrics(y_test, svr_forecast_test)
+else:
+    svr_metrics = {}
+
+# --- Model 3: XGBoost Regressor ---
+xgb_model = xgb.XGBRegressor(random_state=42, objective='reg:squarederror')
+xgb_model.fit(X_train, y_train)
+if X_test is not None:
+    xgb_forecast_test = xgb_model.predict(X_test)
+    xgb_metrics = compute_metrics(y_test, xgb_forecast_test)
+else:
+    xgb_metrics = {}
+
+# --- Model 4: LSTM Neural Network ---
+# For LSTM, we use a sliding window approach with window_size=3.
+window_size = 3
+# Create dataset for LSTM
+X_lstm, y_lstm = create_sliding_window(y_full, window_size)
+# Reshape X for LSTM: [samples, timesteps, features]
+X_lstm = X_lstm.reshape((X_lstm.shape[0], X_lstm.shape[1], 1))
+
+# Split LSTM data into train/test (align with forecast_horizon)
+if len(X_lstm) > forecast_horizon:
+    n_train_lstm = len(X_lstm) - forecast_horizon
+    X_train_lstm = X_lstm[:n_train_lstm]
+    y_train_lstm = y_lstm[:n_train_lstm]
+    X_test_lstm = X_lstm[n_train_lstm:]
+    y_test_lstm = y_lstm[n_train_lstm:]
+else:
+    X_train_lstm = X_lstm
+    y_train_lstm = y_lstm
+    X_test_lstm = None
+    y_test_lstm = None
+
+# Build a simple LSTM model
+lstm_model = Sequential()
+lstm_model.add(LSTM(50, activation='relu', input_shape=(window_size, 1)))
+lstm_model.add(Dense(1))
+lstm_model.compile(optimizer='adam', loss='mse')
+
+# Fit LSTM model with early stopping
+if X_test_lstm is not None:
+    es = EarlyStopping(monitor='loss', patience=10, restore_best_weights=True)
+    lstm_model.fit(X_train_lstm, y_train_lstm, epochs=100, verbose=0, callbacks=[es])
+    lstm_forecast_test = lstm_model.predict(X_test_lstm).flatten()
+    lstm_metrics = compute_metrics(y_test_lstm, lstm_forecast_test)
+else:
+    lstm_metrics = {}
+
+# Compile evaluation results for Group 4
+results_group4 = pd.DataFrame([
+    {"Model": "Random Forest Regressor", **rf_metrics},
+    {"Model": "SVR", **svr_metrics},
+    {"Model": "XGBoost Regressor", **xgb_metrics},
+    {"Model": "LSTM Neural Network", **lstm_metrics}
+])
+
+print("Forecasting Results for Group 4 (Machine Learning):")
+print(results_group4, "\n")
+
+# Determine best model based on RMSE (if metrics exist)
+if not results_group4.empty and 'RMSE' in results_group4.columns:
+    best_model_row = results_group4.loc[results_group4['RMSE'].idxmin()]
+    best_model_name = best_model_row['Model']
+    print("Best Model in Group 4 based on RMSE:")
+    print(best_model_row, "\n")
+
+    # Use the forecast from the best model on the full historical series
+    if best_model_name == "Random Forest Regressor":
+        best_ml_forecast = rf_model.predict(np.arange(n, n + forecast_horizon).reshape(-1, 1))
+    elif best_model_name == "SVR":
+        best_ml_forecast = svr_model.predict(np.arange(n, n + forecast_horizon).reshape(-1, 1))
+    elif best_model_name == "XGBoost Regressor":
+        best_ml_forecast = xgb_model.predict(np.arange(n, n + forecast_horizon).reshape(-1, 1))
+    elif best_model_name == "LSTM Neural Network":
+        # For LSTM, use a recursive approach.
+        # Start with the last 'window_size' values from the full series.
+        last_window = y_full[-window_size:].tolist()
+        best_ml_forecast = []
+        for _ in range(forecast_horizon):
+            # Prepare input in the required shape
+            x_input = np.array(last_window[-window_size:]).reshape((1, window_size, 1))
+            yhat = lstm_model.predict(x_input, verbose=0)[0,0]
+            best_ml_forecast.append(yhat)
+            last_window.append(yhat)
+        best_ml_forecast = np.array(best_ml_forecast)
+    else:
+        best_ml_forecast = None
+else:
+    best_model_name = None
+    best_ml_forecast = None
+
+# Plot: Historical Sales + Forecast from the best ML model
+plt.figure(figsize=(12, 6))
+plt.plot(sales_series.index, sales_series.values, marker='o', label="Historical Sales", color="blue")
+if best_ml_forecast is not None:
+    forecast_index = pd.date_range(start=sales_series.index[-1] + pd.DateOffset(months=1),
+                                   periods=forecast_horizon, freq='MS')
+    plt.plot(forecast_index, best_ml_forecast, marker='o', linestyle='--',
+             label=f"Forecast ({best_model_name})", color="red")
+plt.xlabel("Date")
+plt.ylabel("Units Sold")
+plt.title(f"Historical Sales and 12-Month Forecast for ITEM_CODE {ITEM_CODE} (Group 4 ML)")
+plt.legend()
+plt.grid(True)
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+# Create a Forecast Table for the Next 12 Months for Group 4
+if best_ml_forecast is not None:
+    forecast_index = pd.date_range(start=sales_series.index[-1] + pd.DateOffset(months=1),
+                                   periods=forecast_horizon, freq='MS')
+    forecast_df_ml = pd.DataFrame({
+        "Date": forecast_index.strftime("%Y-%m"),
+        "Forecast": best_ml_forecast
+    })
+    print("12-Month Forecast Table for Group 4:")
+    print(forecast_df_ml)
+else:
+    forecast_df_ml = None
+    print("No forecast available for Group 4.")
+
+# Save the forecast results globally for future analyses.
+GLOBAL_FORECAST_RESULTS_GROUP4 = {
+    "Evaluation": results_group4,
+    "BestModel": best_model_name,
+    "Forecast": best_ml_forecast,
+    "ForecastTable": forecast_df_ml
+}
+
+# Optionally, save the evaluation results to a CSV file.
+results_group4.to_csv("model_evaluation_results_group4.csv", index=False)
+
+---
+
+# notebook 012
+import warnings
+warnings.filterwarnings("ignore")  # Suppress warnings
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import statsmodels.api as sm
+from statsmodels.tsa.seasonal import STL
+from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_absolute_percentage_error
+
+# Prophet: make sure to install it via: pip install prophet
+from prophet import Prophet
+
+# -------------------------------------------------------------------
+# Function: compute_metrics
+# -------------------------------------------------------------------
+def compute_metrics(true_values, forecast_values):
+    """
+    Computes MAE, MSE, RMSE, and MAPE.
+    """
+    mae = mean_absolute_error(true_values, forecast_values)
+    mse = mean_squared_error(true_values, forecast_values)
+    rmse = np.sqrt(mse)
+    mape = mean_absolute_percentage_error(true_values, forecast_values) * 100  # Percentage
+    return {'MAE': mae, 'MSE': mse, 'RMSE': rmse, 'MAPE': mape}
+
+# -------------------------------------------------------------------
+# Model 1: STL Naive Forecast
+# -------------------------------------------------------------------
+def stl_naive_forecast(time_series, forecast_horizon, period=12):
+    """
+    Performs STL decomposition and generates a naive forecast by:
+      - Using the last trend value as constant for the forecast.
+      - Repeating the seasonal pattern from the last full cycle.
+    Returns the forecast as a pandas Series.
+    """
+    stl = STL(time_series, period=period)
+    res = stl.fit()
+    trend = res.trend
+    seasonal = res.seasonal
+
+    # Last trend value (assumed constant in forecast)
+    trend_last = trend.iloc[-1]
+
+    # Extract the last full seasonal cycle
+    seasonal_pattern = seasonal.iloc[-period:]
+
+    # Repeat the seasonal pattern to match the forecast horizon
+    seasonal_forecast = np.tile(seasonal_pattern.values, int(np.ceil(forecast_horizon/period)))[:forecast_horizon]
+    forecast_values = trend_last + seasonal_forecast
+
+    # Create forecast index starting from next month
+    forecast_index = pd.date_range(start=time_series.index[-1] + pd.DateOffset(months=1),
+                                   periods=forecast_horizon, freq='MS')
+    return pd.Series(forecast_values, index=forecast_index)
+
+# -------------------------------------------------------------------
+# Model 2: Facebook Prophet
+# -------------------------------------------------------------------
+def prophet_forecast(time_series, forecast_horizon):
+    """
+    Fits Prophet on the provided time series and forecasts the next forecast_horizon months.
+    """
+    # Prophet requires a DataFrame with columns 'ds' and 'y'
+    prophet_df = pd.DataFrame({"ds": time_series.index, "y": time_series.values})
+    model = Prophet(yearly_seasonality=True, weekly_seasonality=False, daily_seasonality=False)
+    model.fit(prophet_df)
+    future = model.make_future_dataframe(periods=forecast_horizon, freq='MS')
+    forecast = model.predict(future)
+    # Extract forecast for the next forecast_horizon months
+    forecast_df = forecast[['ds', 'yhat']].tail(forecast_horizon)
+    forecast_df.set_index('ds', inplace=True)
+    return forecast_df['yhat']
+
+# -------------------------------------------------------------------
+# Forecasting for Group 5: Decomposition/Externals Models
+# -------------------------------------------------------------------
+# Use the global historical sales time series for the selected ITEM_CODE.
+# HISTORICAL_SALES and ITEM_CODE are assumed to be defined from previous notebooks.
+sales_series = HISTORICAL_SALES.asfreq('MS')
+forecast_horizon = 12  # Forecast next 12 months
+
+# For evaluation: if the series is long enough, split into train/test.
+if len(sales_series) > forecast_horizon:
+    n = len(sales_series)
+    n_train = n - forecast_horizon
+    train_part = sales_series.iloc[:n_train]
+    test_part = sales_series.iloc[n_train:]
+
+    # STL Naive Forecast evaluation on train_part
+    stl_forecast_test = stl_naive_forecast(train_part, forecast_horizon, period=12)
+    stl_metrics = compute_metrics(test_part, stl_forecast_test)
+
+    # Prophet evaluation: fit on train_part and forecast for test dates.
+    prophet_forecast_series = prophet_forecast(train_part, forecast_horizon)
+    prophet_metrics = compute_metrics(test_part, prophet_forecast_series)
+else:
+    stl_metrics = {}
+    prophet_metrics = {}
+
+# Fit on full historical series for full forecast.
+full_stl_forecast = stl_naive_forecast(sales_series, forecast_horizon, period=12)
+full_prophet_forecast = prophet_forecast(sales_series, forecast_horizon)
+
+# Compile evaluation results for Group 5.
+results_group5 = pd.DataFrame([
+    {"Model": "STL Naive Forecast", **stl_metrics},
+    {"Model": "Facebook Prophet", **prophet_metrics}
+])
+
+print("Forecasting Results for Group 5 (Decomposition/Externals):")
+print(results_group5, "\n")
+
+# Determine the best model based on RMSE (if metrics available)
+if not results_group5.empty and 'RMSE' in results_group5.columns:
+    best_model_row = results_group5.loc[results_group5['RMSE'].idxmin()]
+    best_model_name = best_model_row['Model']
+    print("Best Model in Group 5 based on RMSE:")
+    print(best_model_row, "\n")
+
+    if best_model_name == "STL Naive Forecast":
+        best_forecast = full_stl_forecast
+    else:
+        best_forecast = full_prophet_forecast
+else:
+    best_model_name = None
+    best_forecast = None
+
+# Plot: Historical Sales + Forecast from the Best Group 5 Model
+plt.figure(figsize=(12, 6))
+plt.plot(sales_series.index, sales_series.values, marker='o', label="Historical Sales", color="blue")
+if best_forecast is not None:
+    plt.plot(best_forecast.index, best_forecast.values, marker='o', linestyle='--',
+             label=f"Forecast ({best_model_name})", color="red")
+plt.xlabel("Date")
+plt.ylabel("Units Sold")
+plt.title(f"Historical Sales and 12-Month Forecast for ITEM_CODE {ITEM_CODE} (Group 5)")
+plt.legend()
+plt.grid(True)
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+# Create a Forecast Table for the Next 12 Months for Group 5
+if best_forecast is not None:
+    forecast_df = pd.DataFrame({
+        "Date": best_forecast.index.strftime("%Y-%m"),
+        "Forecast": best_forecast.values
+    })
+    print("12-Month Forecast Table for Group 5:")
+    print(forecast_df)
+else:
+    forecast_df = None
+    print("No forecast available for Group 5.")
+
+# Save the forecast results globally for future analyses.
+GLOBAL_FORECAST_RESULTS_GROUP5 = {
+    "Evaluation": results_group5,
+    "BestModel": best_model_name,
+    "Forecast": best_forecast,
+    "ForecastTable": forecast_df
+}
+
+# Optionally, save the evaluation results to a CSV file.
+results_group5.to_csv("model_evaluation_results_group5.csv", index=False)
+
+---
+
+import pandas as pd
+import matplotlib.pyplot as plt
+from datetime import datetime
+import os
+
+# -------------------------------------------------------------------
+# Helper function to load group results from CSV files (evaluation + forecast table)
+# -------------------------------------------------------------------
+def load_group_results(group_num):
+    """
+    Attempts to load:
+      - model_evaluation_results_group{group_num}.csv  (Evaluation DataFrame)
+      - forecast_table_group{group_num}.csv            (Forecast Table DataFrame)
+
+    Returns a dictionary with:
+      {
+        "Evaluation": <DataFrame or None>,
+        "BestModel": <string or None>,
+        "ForecastTable": <DataFrame or None>
+      }
+    """
+    results = {}
+
+    # Load evaluation CSV
+    eval_filename = f"model_evaluation_results_group{group_num}.csv"
+    try:
+        eval_df = pd.read_csv(eval_filename)
+        results["Evaluation"] = eval_df
+        # Determine best model from the lowest RMSE in the CSV
+        if not eval_df.empty and "RMSE" in eval_df.columns:
+            best_row = eval_df.loc[eval_df["RMSE"].idxmin()]
+            results["BestModel"] = best_row["Model"]
+        else:
+            results["BestModel"] = None
+    except FileNotFoundError:
+        print(f"File not found: {eval_filename}")
+        results["Evaluation"] = None
+        results["BestModel"] = None
+    except Exception as e:
+        print(f"Error loading {eval_filename}: {e}")
+        results["Evaluation"] = None
+        results["BestModel"] = None
+
+    # Load forecast table CSV
+    forecast_filename = f"forecast_table_group{group_num}.csv"
+    try:
+        forecast_table = pd.read_csv(forecast_filename)
+        if "Date" in forecast_table.columns:
+            # Convert the Date column to datetime objects
+            forecast_table["Date"] = pd.to_datetime(forecast_table["Date"], format="%Y-%m")
+        results["ForecastTable"] = forecast_table
+    except FileNotFoundError:
+        print(f"File not found: {forecast_filename}")
+        results["ForecastTable"] = None
+    except Exception as e:
+        print(f"Error loading {forecast_filename}: {e}")
+        results["ForecastTable"] = None
+
+    return results
+
+# -------------------------------------------------------------------
+# Step 1: Attempt to load or use global variables for each group
+# -------------------------------------------------------------------
+required_groups = {
+    "GLOBAL_FORECAST_RESULTS_GROUP1": 1,
+    "GLOBAL_FORECAST_RESULTS_GROUP2": 2,
+    "GLOBAL_FORECAST_RESULTS_GROUP3": 3,
+    "GLOBAL_FORECAST_RESULTS_GROUP4": 4,
+    "GLOBAL_FORECAST_RESULTS_GROUP5": 5
+}
+
+for group_var, group_num in required_groups.items():
+    if group_var not in globals() or globals()[group_var] is None:
+        print(f"{group_var} is not defined. Attempting to load from CSV for Group {group_num}...")
+        globals()[group_var] = load_group_results(group_num)
+
+# Also check for ITEM_CODE and HISTORICAL_SALES
+other_required_globals = ["ITEM_CODE", "HISTORICAL_SALES"]
+missing_globals = [var for var in other_required_globals if var not in globals() or globals()[var] is None]
+
+if missing_globals:
+    print("\nError: The following required globals are missing:")
+    print(missing_globals)
+    print("Please ensure that you have run the previous notebooks or that the data is available.")
+else:
+    print("\nAll required global variables for ITEM_CODE and HISTORICAL_SALES are available.")
+
+# -------------------------------------------------------------------
+# Step 2: Build a dictionary for the group results
+# -------------------------------------------------------------------
+groups = {
+    "Group1": GLOBAL_FORECAST_RESULTS_GROUP1,
+    "Group2": GLOBAL_FORECAST_RESULTS_GROUP2,
+    "Group3": GLOBAL_FORECAST_RESULTS_GROUP3,
+    "Group4": GLOBAL_FORECAST_RESULTS_GROUP4,
+    "Group5": GLOBAL_FORECAST_RESULTS_GROUP5
+}
+
+# -------------------------------------------------------------------
+# Step 3: Create a comparison table from each group's best model
+# -------------------------------------------------------------------
+records = []
+for group_name, results in groups.items():
+    if results is not None:
+        eval_df = results.get("Evaluation")
+        best_model_name = results.get("BestModel")
+        if eval_df is not None and not eval_df.empty and best_model_name is not None:
+            # Find the row corresponding to the best model
+            row = eval_df[eval_df["Model"] == best_model_name].iloc[0]
+            records.append({
+                "Group": group_name,
+                "BestModel": best_model_name,
+                "MAE": row.get("MAE", None),
+                "MSE": row.get("MSE", None),
+                "RMSE": row.get("RMSE", None),
+                "MAPE": row.get("MAPE", None)
+            })
+
+comparison_df = pd.DataFrame(records)
+print("\nComparison of Best Models from All Groups:")
+print(comparison_df)
+
+# -------------------------------------------------------------------
+# Step 4: Determine Overall Best Model Based on RMSE
+# -------------------------------------------------------------------
+if not comparison_df.empty and "RMSE" in comparison_df.columns:
+    overall_best_row = comparison_df.loc[comparison_df["RMSE"].idxmin()]
+    overall_best_group = overall_best_row["Group"]
+    overall_best_model = overall_best_row["BestModel"]
+    print("\nOverall Best Model:")
+    print(overall_best_row)
+    print("\nDecision Explanation:")
+    print(f"The overall best model is from {overall_best_group} using '{overall_best_model}',")
+    print("because it has the lowest RMSE among all groups, indicating the best fit for the historical sales data.")
+else:
+    overall_best_group = None
+    overall_best_model = None
+    print("\nNo overall best model could be determined.")
+
+# -------------------------------------------------------------------
+# Step 5: Retrieve the Forecast and Forecast Table from the Best Group
+# -------------------------------------------------------------------
+if overall_best_group in groups:
+    best_group_results = groups[overall_best_group]
+    overall_best_forecast = best_group_results.get("Forecast")  # This might be a NumPy array or a Pandas Series
+    overall_forecast_table = best_group_results.get("ForecastTable")
+else:
+    overall_best_forecast = None
+    overall_forecast_table = None
+
+# -------------------------------------------------------------------
+# Step 6: Plot Historical Sales and the Overall Best Forecast
+# -------------------------------------------------------------------
+if "HISTORICAL_SALES" in globals() and HISTORICAL_SALES is not None:
+    plt.figure(figsize=(12, 6))
+    plt.plot(HISTORICAL_SALES.index, HISTORICAL_SALES.values, marker='o', label="Historical Sales", color="blue")
+
+    if overall_best_forecast is not None:
+        # If the best forecast is a NumPy array, we handle it accordingly
+        if hasattr(overall_best_forecast, "values"):
+            # It's likely a Pandas Series
+            best_forecast_array = overall_best_forecast.values
+            horizon_length = len(best_forecast_array)
+        else:
+            # It's likely a NumPy array
+            best_forecast_array = overall_best_forecast
+            horizon_length = len(best_forecast_array)
+
+        # Build forecast index for plotting
+        forecast_index = pd.date_range(
+            start=HISTORICAL_SALES.index[-1] + pd.DateOffset(months=1),
+            periods=horizon_length, freq='MS'
+        )
+        plt.plot(forecast_index, best_forecast_array, marker='o', linestyle='--',
+                 label=f"Forecast ({overall_best_model})", color="red")
+
+    plt.xlabel("Date")
+    plt.ylabel("Units Sold")
+    plt.title(f"Overall Best Forecast for ITEM_CODE {ITEM_CODE}")
+    plt.legend()
+    plt.grid(True)
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
+else:
+    print("HISTORICAL_SALES is missing. Cannot plot historical sales.")
+
+# -------------------------------------------------------------------
+# Step 7: Display the 12-Month Forecast Table
+# -------------------------------------------------------------------
+if overall_forecast_table is not None and not overall_forecast_table.empty:
+    print("\nOverall 12-Month Forecast Table:")
+    print(overall_forecast_table)
+else:
+    print("No forecast table available for the overall best model.")
+
+# Save the overall results globally for future analyses
+GLOBAL_OVERALL_FORECAST_RESULTS = {
+    "Comparison": comparison_df,
+    "BestModel": overall_best_model,
+    "BestGroup": overall_best_group,
+    "Forecast": overall_best_forecast,
+    "ForecastTable": overall_forecast_table
+}
+
+# Optionally, save the comparison and forecast table to CSV files
+comparison_df.to_csv("overall_model_comparison.csv", index=False)
+if overall_forecast_table is not None:
+    overall_forecast_table.to_csv("overall_forecast_table.csv", index=False)
+
+---
+
+
